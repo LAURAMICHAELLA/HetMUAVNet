@@ -1,0 +1,312 @@
+From 03fed5d7fd691726293fe8bea37d6bcbb16665fb Mon Sep 17 00:00:00 2001
+From: Fabio D'Urso <durso@dmi.unict.it>
+Date: Sun, 29 Jul 2018 11:04:53 +0200
+Subject: [PATCH 3/3] SIM_GzUav: emulate 2-axis Alexmos gimbal
+
+---
+ libraries/AP_HAL_SITL/SITL_State.cpp |   8 ++
+ libraries/SITL/SIM_GzUav.cpp         | 167 +++++++++++++++++++++++++++++++++++
+ libraries/SITL/SIM_GzUav.h           |  31 ++++++-
+ 3 files changed, 204 insertions(+), 2 deletions(-)
+
+diff --git a/libraries/AP_HAL_SITL/SITL_State.cpp b/libraries/AP_HAL_SITL/SITL_State.cpp
+index eb8d0938f..e82d76ef7 100644
+--- a/libraries/AP_HAL_SITL/SITL_State.cpp
++++ b/libraries/AP_HAL_SITL/SITL_State.cpp
+@@ -16,6 +16,7 @@
+ #include <sys/select.h>
+ 
+ #include <AP_Param/AP_Param.h>
++#include <SITL/SIM_GzUav.h>
+ #include <SITL/SIM_JSBSim.h>
+ #include <AP_HAL/utility/Socket.h>
+ 
+@@ -203,6 +204,13 @@ int SITL_State::sim_fd(const char *name, const char *arg)
+         vicon = new SITL::Vicon();
+         return vicon->fd();
+     }
++    else if (streq(name, "gzuav-gimbal")) {
++        SITL::GzUav *gzuav = dynamic_cast<SITL::GzUav*>(sitl_model);
++        if (gzuav == nullptr) {
++            AP_HAL::panic("gzuav-gimbal can only be used in conjunction with a GzUav model");
++        }
++        return gzuav->gimbal_fd();
++    }
+     AP_HAL::panic("unknown simulated device: %s", name);
+ }
+ 
+diff --git a/libraries/SITL/SIM_GzUav.cpp b/libraries/SITL/SIM_GzUav.cpp
+index 9f4139b5a..6c0faebe2 100644
+--- a/libraries/SITL/SIM_GzUav.cpp
++++ b/libraries/SITL/SIM_GzUav.cpp
+@@ -52,6 +52,14 @@ GzUav::GzUav(const char *home_str, const char *frame_str) :
+     socket_sitl(-1)
+ {
+     fprintf(stdout, "Starting SITL GzUav\n");
++
++    // Initialize Alexmos emulation
++    int sv[2];
++    socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv);
++    alexmos_device = sv[0];
++    alexmos_ardupilot = sv[1];
++
++    alexmos_rx_step = WAIT_FOR_SYNC;
+ }
+ 
+ /*
+@@ -76,6 +84,10 @@ void GzUav::send_servos(const struct sitl_input &input)
+       pkt.motor_speed[i] = (input.servos[i]-1000) / 1000.0f;
+     }
+ 
++    pkt.gimbal_r = gimbal_target_r_deg * M_PI / 180;
++    pkt.gimbal_p = gimbal_target_p_deg * M_PI / 180;
++    pkt.gimbal_y = gimbal_target_y_deg * M_PI / 180;
++
+     send(socket_sitl, &pkt, sizeof(pkt), 0);
+ }
+ 
+@@ -120,6 +132,9 @@ void GzUav::recv_fdm(const struct sitl_input &input)
+                         static_cast<float>(pkt.position_xyz[1]),
+                         static_cast<float>(pkt.position_xyz[2]));
+ 
++    gimbal_current_r_deg = pkt.gimbal_rpy[0] * 180 / M_PI;
++    gimbal_current_p_deg = pkt.gimbal_rpy[1] * 180 / M_PI;
++    gimbal_current_y_deg = pkt.gimbal_rpy[2] * 180 / M_PI;
+ 
+     // auto-adjust to simulation frame rate
+     time_now_us += static_cast<uint64_t>(deltat * 1.0e6);
+@@ -131,6 +146,105 @@ void GzUav::recv_fdm(const struct sitl_input &input)
+ 
+ }
+ 
++void GzUav::process_alexmos_command(unsigned char command_id, const void *data, size_t data_length)
++{
++#define VALUE_TO_DEGREE(d) ((float)((d * 720) >> 15))
++#define DEGREE_TO_VALUE(d) ((int16_t)((float)(d)*(1.0f/0.02197265625f)))
++
++    switch (command_id)
++    {
++        case 'V': // version information
++        {
++            struct PACKED {
++                uint8_t board_version;
++                uint16_t firmware_version;
++                uint8_t debug_mode;
++                uint16_t board_features;
++            } reply;
++
++            reply.board_version = 0x10;
++            reply.firmware_version = 0x2305;
++            reply.debug_mode = 0;
++#if 0
++            reply.board_features = 1; // 3-axis
++#else
++            reply.board_features = 0; // 2-axis
++#endif
++
++            send_alexmos_command('V', &reply, sizeof(reply));
++            break;
++        }
++
++        case 'C': // control
++        {
++            const struct PACKED {
++                int8_t mode;
++                int16_t speed_roll;
++                int16_t angle_roll;
++                int16_t speed_pitch;
++                int16_t angle_pitch;
++                int16_t speed_yaw;
++                int16_t angle_yaw;
++            } *command = (decltype(command))data;
++
++            gimbal_target_r_deg = VALUE_TO_DEGREE(command->angle_roll);
++            gimbal_target_p_deg = VALUE_TO_DEGREE(command->angle_pitch);
++            gimbal_target_y_deg = VALUE_TO_DEGREE(command->angle_yaw);
++
++            //printf("command %.2f %.2f %.2f\n", gimbal_target_r_deg, gimbal_target_p_deg, gimbal_target_y_deg);
++            break;
++        }
++
++        case 'I': // get angles
++        {
++            struct PACKED {
++                int16_t angle_roll;
++                int16_t rc_angle_roll;
++                int16_t rc_speed_roll;
++                int16_t angle_pitch;
++                int16_t rc_angle_pitch;
++                int16_t rc_speed_pitch;
++                int16_t angle_yaw;
++                int16_t rc_angle_yaw;
++                int16_t rc_speed_yaw;
++            } reply;
++
++            reply.angle_roll = DEGREE_TO_VALUE(gimbal_current_r_deg);
++            reply.rc_angle_roll = 0; // ignored
++            reply.rc_speed_roll = 0; // ignored
++            reply.angle_pitch = DEGREE_TO_VALUE(gimbal_current_p_deg);
++            reply.rc_angle_pitch = 0; // ignored
++            reply.rc_speed_pitch = 0; // ignored
++            reply.angle_yaw = DEGREE_TO_VALUE(gimbal_current_y_deg);
++            reply.rc_angle_yaw = 0; // ignored
++            reply.rc_speed_yaw = 0; // ignored
++
++            send_alexmos_command('I', &reply, sizeof(reply));
++            break;
++        }
++
++        default:
++            printf("[SITL::GzUav] Unsupported alexmos cmd=%c len=%d\n", command_id, (int)data_length);
++    }
++}
++
++void GzUav::send_alexmos_command(unsigned char command_id, const void *data, size_t data_length)
++{
++    unsigned char message[4 + data_length + 1];
++    message[0] = '>';
++    message[1] = command_id;
++    message[2] = (unsigned char)data_length;
++    message[3] = message[1] + message[2];
++
++    unsigned char checksum = 0;
++    for (size_t i = 0; i < data_length; i++)
++        checksum += message[4 + i] = ((const unsigned char*)data)[i];
++
++    message[4 + data_length] = checksum;
++
++    send(alexmos_device, message, 4 + data_length + 1, MSG_DONTWAIT);
++}
++
+ /*
+   update the Gazebo simulation by one time step
+  */
+@@ -142,6 +256,59 @@ void GzUav::update(const struct sitl_input &input)
+ 
+     // update magnetic field
+     update_mag_field_bf();
++
++    // process incoming data to simulated alexmos controller
++    unsigned char data;
++    while (recv(alexmos_device, &data, 1, MSG_DONTWAIT) == 1)
++    {
++        switch (alexmos_rx_step)
++        {
++            case WAIT_FOR_SYNC:
++                if (data == '>')
++                    alexmos_rx_step = WAIT_FOR_COMMAND_ID;
++                break;
++
++            case WAIT_FOR_COMMAND_ID:
++                alexmos_command_id = data;
++                alexmos_rx_step = WAIT_FOR_DATA_SIZE;
++                break;
++
++            case WAIT_FOR_DATA_SIZE:
++                alexmos_body_size = data;
++                alexmos_rx_step = WAIT_FOR_HEADER_CHECKSUM;
++                break;
++
++            case WAIT_FOR_HEADER_CHECKSUM:
++                if (data != (alexmos_command_id + alexmos_body_size) % 256)
++                {
++                    alexmos_rx_step = WAIT_FOR_SYNC;
++                }
++                else if (alexmos_body_size != 0)
++                {
++                    alexmos_rx_step = WAIT_FOR_BODY;
++                    alexmos_body_wcursor = 0;
++                }
++                else
++                {
++                    alexmos_rx_step = WAIT_FOR_BODY_CHECKSUM;
++                }
++                break;
++
++            case WAIT_FOR_BODY:
++                alexmos_body[alexmos_body_wcursor++] = data;
++                if (alexmos_body_wcursor == alexmos_body_size)
++                    alexmos_rx_step = WAIT_FOR_BODY_CHECKSUM;
++                break;
++
++            case WAIT_FOR_BODY_CHECKSUM:
++                for (unsigned char i = 0; i < alexmos_body_size; i++)
++                    data -= alexmos_body[i];
++                if (data == 0)
++                    process_alexmos_command(alexmos_command_id, alexmos_body, alexmos_body_size);
++                alexmos_rx_step = WAIT_FOR_SYNC;
++                break;
++        }
++    }
+ }
+ 
+ }  // namespace SITL
+diff --git a/libraries/SITL/SIM_GzUav.h b/libraries/SITL/SIM_GzUav.h
+index 91af4b01c..192d0ff3a 100644
+--- a/libraries/SITL/SIM_GzUav.h
++++ b/libraries/SITL/SIM_GzUav.h
+@@ -38,16 +38,22 @@ public:
+         return new GzUav(home_str, frame_str);
+     }
+ 
+-    /*  Create and set in/out socket for GzUav simulator */
++    /* Create and set in/out socket for GzUav simulator */
+     void set_interface_ports(const char* address, const int port_in, const int port_out);
+ 
++    /* Socket to the simulated Alexmos gimbal controller */
++    int gimbal_fd() { return alexmos_ardupilot; }
++
+ private:
+     /*
+       packet sent to GzUav
+      */
+     struct servo_packet {
+-      // size matches sitl_input upstream
++      // size matches GzUavPlugin
+       float motor_speed[16];
++
++      // gimbal setpoints
++      float gimbal_r, gimbal_p, gimbal_y;
+     };
+ 
+     /*
+@@ -61,15 +67,36 @@ private:
+       double imu_orientation_quat[4];
+       double velocity_xyz[3];
+       double position_xyz[3];
++      double gimbal_rpy[3];
+     };
+ 
+     void recv_fdm(const struct sitl_input &input);
+     void send_servos(const struct sitl_input &input);
+ 
++    void send_alexmos_command(unsigned char command_id, const void *data, size_t data_length);
++    void process_alexmos_command(unsigned char command_id, const void *data, size_t data_length);
++
+     double last_timestamp;
+ 
+     // Unix-domain socket connected to gzuavchannel
+     int socket_sitl;
++
++    // Unix-domain socket endpoints of the simulated Alexmos gimbal serial channel
++    int alexmos_device, alexmos_ardupilot;
++
++    // Alexmos reception state machine
++    enum {
++        WAIT_FOR_SYNC,
++        WAIT_FOR_COMMAND_ID,
++        WAIT_FOR_DATA_SIZE,
++        WAIT_FOR_HEADER_CHECKSUM,
++        WAIT_FOR_BODY,
++        WAIT_FOR_BODY_CHECKSUM
++    } alexmos_rx_step;
++    unsigned char alexmos_command_id, alexmos_body_size;
++    unsigned char alexmos_body[255], alexmos_body_wcursor;
++    float gimbal_current_r_deg, gimbal_current_p_deg, gimbal_current_y_deg;
++    float gimbal_target_r_deg, gimbal_target_p_deg, gimbal_target_y_deg;
+ };
+ 
+ }  // namespace SITL
+-- 
+2.13.6
+

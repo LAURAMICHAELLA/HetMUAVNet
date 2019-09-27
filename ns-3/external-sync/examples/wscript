@@ -1,0 +1,17 @@
+# -*- Mode: python; py-indent-offset: 4; indent-tabs-mode: nil; coding: utf-8; -*-
+
+def build(bld):
+    obj = bld.create_ns3_program('external-sync-p2p', ['core', 'point-to-point', 'internet', 'applications', 'external-sync'])
+    obj.source = 'p2p.cc'
+
+    obj = bld.create_ns3_program('external-sync-lan', ['core', 'internet', 'applications', 'csma', 'external-sync'])
+    obj.source = 'lan.cc'
+
+    obj = bld.create_ns3_program('external-sync-wifi', ['core', 'internet', 'applications', 'csma', 'wifi', 'external-sync'])
+    obj.source = 'wifi.cc'
+
+    obj = bld.create_ns3_program('external-sync-wifi-adhoc', ['core', 'internet', 'applications', 'csma', 'wifi', 'external-sync'])
+    obj.source = 'wifi-adhoc.cc'
+
+    obj = bld.create_ns3_program('external-sync-lr-wpan', ['core', 'lr-wpan', 'stats', 'internet', 'applications', 'csma', 'external-sync'])
+    obj.source = 'lr-wpan.cc'

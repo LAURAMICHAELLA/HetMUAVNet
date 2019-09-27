@@ -1,0 +1,70 @@
+From f525a1e22544ad5a8d793f46eea22b8709a6c8a6 Mon Sep 17 00:00:00 2001
+From: Fabio D'Urso <durso@dmi.unict.it>
+Date: Sun, 22 Jul 2018 17:31:52 +0200
+Subject: [PATCH 1/3] Faster simulation startup time (DO NOT USE IN A REAL
+ VEHICLE!!!)
+
+---
+ libraries/AP_Baro/AP_Baro.cpp                     | 2 ++
+ libraries/AP_NavEKF2/AP_NavEKF2_VehicleStatus.cpp | 4 ++--
+ libraries/AP_NavEKF2/AP_NavEKF_GyroBias.cpp       | 2 +-
+ 3 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/libraries/AP_Baro/AP_Baro.cpp b/libraries/AP_Baro/AP_Baro.cpp
+index a7b8dfec3..23ab4c70e 100644
+--- a/libraries/AP_Baro/AP_Baro.cpp
++++ b/libraries/AP_Baro/AP_Baro.cpp
+@@ -175,6 +175,7 @@ void AP_Baro::calibrate(bool save)
+         sensors[i].alt_ok = true;
+     }
+ 
++#if 0 // this is not necessary for SITL
+     // let the barometer settle for a full second after startup
+     // the MS5611 reads quite a long way off for the first second,
+     // leading to about 1m of error if we don't wait
+@@ -190,6 +191,7 @@ void AP_Baro::calibrate(bool save)
+         } while (!healthy());
+         hal.scheduler->delay(100);
+     }
++#endif
+ 
+     // now average over 5 values for the ground pressure and
+     // temperature settings
+diff --git a/libraries/AP_NavEKF2/AP_NavEKF2_VehicleStatus.cpp b/libraries/AP_NavEKF2/AP_NavEKF2_VehicleStatus.cpp
+index f90d04e45..3e58688e8 100644
+--- a/libraries/AP_NavEKF2/AP_NavEKF2_VehicleStatus.cpp
++++ b/libraries/AP_NavEKF2/AP_NavEKF2_VehicleStatus.cpp
+@@ -230,7 +230,7 @@ bool NavEKF2_core::calcGpsGoodToAlign(void)
+     }
+ 
+     // continuous period without fail required to return a healthy status
+-    if (imuSampleTime_ms - lastGpsVelFail_ms > 10000) {
++    if (imuSampleTime_ms - lastGpsVelFail_ms > 100) {
+         return true;
+     }
+     return false;
+@@ -283,7 +283,7 @@ void NavEKF2_core::calcGpsGoodForFlight(void)
+     }
+     if ((imuSampleTime_ms - lastInnovPassTime_ms) > 1000) {
+         ekfInnovationsPass = false;
+-    } else if ((imuSampleTime_ms - lastInnovFailTime_ms) > 10000) {
++    } else if ((imuSampleTime_ms - lastInnovFailTime_ms) > 100) {
+         ekfInnovationsPass = true;
+     }
+ 
+diff --git a/libraries/AP_NavEKF2/AP_NavEKF_GyroBias.cpp b/libraries/AP_NavEKF2/AP_NavEKF_GyroBias.cpp
+index 46090689e..483ff622e 100644
+--- a/libraries/AP_NavEKF2/AP_NavEKF_GyroBias.cpp
++++ b/libraries/AP_NavEKF2/AP_NavEKF_GyroBias.cpp
+@@ -30,7 +30,7 @@ void NavEKF2_core::resetGyroBias(void)
+  */
+ float NavEKF2_core::InitialGyroBiasUncertainty(void) const
+ {
+-    return 2.5f;
++    return 0;
+ }
+ 
+ 
+-- 
+2.13.6
+

@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+import os
+import json
+import subprocess
+import sys
+import urllib.request
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '../share/gzuav'))
+from gzuavlib.GazeboPaths import generate_model_path, generate_plugin_path
+from gzuavlib.GzUavPaths import LIBEXECDIR, SHAREDIR
+
+server_ip = sys.argv[1]
+server_port = int(sys.argv[2])
+
+THISDIR = os.path.abspath(os.path.dirname(__file__))
+
+info_dict = json.loads(urllib.request.urlopen('http://{}:{}/info'.format(server_ip, server_port)).read().decode())
+
+gzenv = dict(os.environ)
+gzenv['GAZEBO_MASTER_URI'] = 'http://{}:{}'.format(server_ip, info_dict['network_info']['gazebo_port'])
+gzenv['GAZEBO_MODEL_PATH'] = generate_model_path(os.path.join(SHAREDIR, 'gzuav/gazebo/models'))
+gzenv['GAZEBO_PLUGIN_PATH'] = generate_plugin_path(os.path.join(LIBEXECDIR, 'gzuav/gazebo/plugins'))
+
+gzcmd = \
+[
+    'gzclient',
+    '--verbose'
+]
+
+subprocess.run(gzcmd, env=gzenv)

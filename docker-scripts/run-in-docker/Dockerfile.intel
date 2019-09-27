@@ -1,0 +1,13 @@
+# Run (tested on an Intel Graphics card laptop):
+#     docker run -ti --net host -v /tmp/.X11-unix:/tmp/.X11-unix \
+#         -e DISPLAY=$DISPLAY -e XAUTHORITY=/.Xauthority \
+#         -v ~/.Xauthority:/.Xauthority:ro
+#         --device=/dev/dri:/dev/dri --name=[NAME] gzuav/intel
+#
+# Note: SELinux may prevent X from working. As a workaround, it can be
+#       temporarily inhibited by running "setenforce 0" on the host.
+
+FROM gzuav/nographics
+
+# Install Intel Graphics card drivers
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y xserver-xorg-video-intel

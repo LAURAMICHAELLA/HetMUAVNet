@@ -1,0 +1,6 @@
+import os
+
+# NOTE: the following paths are filled at installation time by cmake
+_install_prefix = os.path.join(os.path.dirname(__file__), "@PATH_FROM_PYTHON_MODULE_TO_PREFIX@")
+LIBEXECDIR = os.path.abspath(os.path.join(_install_prefix, "@PATH_FROM_PREFIX_TO_LIBEXECDIR@"))
+SHAREDIR = os.path.abspath(os.path.join(_install_prefix, "@PATH_FROM_PREFIX_TO_SHAREDIR@"))

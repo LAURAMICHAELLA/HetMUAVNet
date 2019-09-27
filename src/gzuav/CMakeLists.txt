@@ -1,0 +1,35 @@
+install(PROGRAMS gzuavclient DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS gzuavcluster DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS gzuavserver DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+file(RELATIVE_PATH
+	PATH_FROM_PYTHON_MODULE_TO_PREFIX
+	${CMAKE_INSTALL_FULL_DATAROOTDIR}/gzuav/gzuavlib
+	${CMAKE_INSTALL_PREFIX}
+)
+
+file(RELATIVE_PATH
+	PATH_FROM_PREFIX_TO_LIBEXECDIR
+	${CMAKE_INSTALL_PREFIX}
+	${CMAKE_INSTALL_FULL_LIBEXECDIR}
+)
+
+file(RELATIVE_PATH
+	PATH_FROM_PREFIX_TO_SHAREDIR
+	${CMAKE_INSTALL_PREFIX}
+	${CMAKE_INSTALL_FULL_DATAROOTDIR}
+)
+
+configure_file(gzuavlib/GzUavPaths.py.in GzUavPaths.py ESCAPE_QUOTES @ONLY)
+
+install(FILES
+	# Static source files
+	gzuavlib/GazeboPaths.py
+	gzuavlib/StatusServer.py
+	gzuavlib/WorldTemplateFiller.py
+
+	# Dynamically generated source file
+	${CMAKE_CURRENT_BINARY_DIR}/GzUavPaths.py
+
+	DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/gzuav/gzuavlib
+)

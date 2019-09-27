@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+import contextlib
+import os
+import json
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '../share/gzuav'))
+from gzuavlib.GzUavPaths import LIBEXECDIR, SHAREDIR
+
+server_ip = sys.argv[1]
+server_port = int(sys.argv[2])
+uav_names = sys.argv[3:]
+
+if '--' in uav_names:
+    companion_process_cmd = uav_names[uav_names.index('--')+1:]
+    uav_names = uav_names[:uav_names.index('--')]
+
+    if len(companion_process_cmd) < 2 or companion_process_cmd[0] not in ("FOR-EACH-UAV", "ONLY-ONE"):
+        print('Invalid companion process specification')
+        sys.exit(1)
+
+    companion_process_foreachuav = companion_process_cmd[0] == "FOR-EACH-UAV"
+    companion_process_cmd = companion_process_cmd[1:]
+else:
+    companion_process_cmd = None
+
+GZUAVCHANNEL = os.path.join(LIBEXECDIR, 'gzuav/gzuavchannel')
+ARDUPILOTEXECDIR = os.path.join(LIBEXECDIR, 'gzuav/ardupilot')
+ARDUPILOTDATADIR = os.path.join(SHAREDIR, 'gzuav/ardupilot')
+
+# Each arducopter instance will listen for MAVLink connections on TCP ports
+# between (MAVLINK_BASE_PORT + 10*i) and (MAVLINK_BASE_PORT + 10*i + 5)
+MAVLINK_BASE_PORT = 5760
+
+# Each arducopter instance will listen for Irlock packets on UDP port
+# (IRLOCK_BASE_PORT + 10*i)
+IRLOCK_BASE_PORT = 9005
+
+# Each arducopter instance will listen for RCIN packets on UDP port
+# (RCIN_BASE_PORT + 10*i)
+RCIN_BASE_PORT = 5501
+
+# A simsync server will be started on this TCP port
+SYMSYNC_PORT = 7834
+
+try:
+    info_dict = json.loads(urllib.request.urlopen('http://{}:{}/info'.format(server_ip, server_port)).read().decode())
+except:
+    print('Connection to gzuavserver failed')
+    sys.exit(1)
+
+with tempfile.TemporaryDirectory(prefix='gzuav-') as tmpdir:
+    # Prepare gzuavchannelcmd command line
+    gzuavchannelcmd = \
+    [
+        GZUAVCHANNEL,
+        '--upstream', 'tcpc:{}:{}'.format(server_ip, info_dict['network_info']['gzuavchannel_port']),
+        '--downstream', 'uds:' + os.path.join(tmpdir, 'gzuavchannel'),
+        '--external-sync-server', str(SYMSYNC_PORT)
+    ]
+
+    for i, name in enumerate(uav_names):
+        gzuavchannelcmd.append('{}:{}'.format(name, i))
+
+    # Launch gzuavchannelcmd
+    with subprocess.Popen(gzuavchannelcmd, stdout=subprocess.PIPE, universal_newlines=True) as chproc, contextlib.ExitStack() as acprocs:
+        if chproc.stdout.readline().strip() != 'GZUAVCHANNEL:STARTING':
+            raise Exception('Failed to launch gzuavchannel')
+        if chproc.stdout.readline().strip() != 'GZUAVCHANNEL:HALF':
+            raise Exception('gzuavchannel failed to connect to server')
+
+        # Launch arducopter instances
+        for i, name in enumerate(uav_names):
+            # Retrieve this UAV's info from info_dict
+            uav_info = info_dict['uav_info'][name]
+
+            # Create one subfolder for each instance
+            uavdir = os.path.join(tmpdir, name)
+            os.mkdir(uavdir)
+
+            # Configure MAV unique ID
+            with open(os.path.join(uavdir, 'mav_id.parm'), 'wt') as mav_id_fp:
+                mav_id_fp.write('SYSID_THISMAV\t{}\n'.format(uav_info['sysid']))
+                if uav_info['has_gimbal']:
+                    mav_id_fp.write('SERIAL6_PROTOCOL\t7\n')
+                    mav_id_fp.write('MNT_TYPE\t3\n')
+                    mav_id_fp.write('MNT_ANGMAX_PAN\t-18000\n')
+                    mav_id_fp.write('MNT_ANGMAX_PAN\t17999\n')
+
+            param_files = []
+            for fname in uav_info['ardupilot_params']:
+                param_files.append(os.path.join(ARDUPILOTDATADIR, fname))
+            param_files.append('mav_id.parm')
+
+            # Tell arducopter to wait for a MAVLink connection only if we have a companion process
+            # command to launch
+            maybe_wait = ':wait' if companion_process_cmd is not None else ''
+
+            accmd = \
+            [
+                os.path.join(ARDUPILOTEXECDIR, uav_info['ardupilot_program']),
+
+                # Initial position and heading
+                '--home', uav_info['home'],
+
+                # Misc parameters
+                '--instance', str(i),
+                '--synthetic-clock',
+                '--disable-fgview',
+                '--model', 'gzuav',
+                '--speedup', '100',
+
+                # Default configuration
+                '--defaults', ','.join(param_files),
+
+                # UNIX socket path and UAV ID to connect to gzuavchannel
+                # (see ardupilot/libraries/SITL/SIM_GzUav.cpp)
+                '--sim-address', os.path.join(tmpdir, 'gzuavchannel'),
+                '--sim-port-in', '-1', # ignored by SIM_GzUav.cpp
+                '--sim-port-out', str(i), # this ID is used by gzuavchannel to identify the arducopter instance
+
+                # MAVLink channel list (adapted from ardupilot/libraries/SITL/SITL_State.h)
+                '--base-port', str(MAVLINK_BASE_PORT + 10*i),
+                '--uartA', 'tcp:0' + maybe_wait, # i.e. listen on MAVLINK_BASE_PORT + 10*i
+                '--uartB', 'GPS1',
+                '--uartC', 'tcpclient:{}:{}'.format(server_ip, info_dict['network_info']['mavmix_uav_port']),
+                '--uartD', 'tcp:3', # i.e. listen on MAVLINK_BASE_PORT + 10*i + 3
+                '--uartE', 'GPS2',
+                '--uartF', 'tcp:5', # i.e. listen on MAVLINK_BASE_PORT + 10*i + 5
+                '--uartG', 'sim:gzuav-gimbal' if uav_info['has_gimbal'] else 'tcp:6',
+
+                # Other UDP ports
+                '--irlock-port', str(IRLOCK_BASE_PORT + 10*i),
+                '--rc-in-port', str(RCIN_BASE_PORT + 10*i)
+            ]
+
+            #print(accmd)
+            acprocs.enter_context(subprocess.Popen(accmd, cwd=uavdir))
+
+        # HACK wait for arducopters to be ready to accept connections on uartA
+        time.sleep(2)
+
+        if companion_process_cmd:
+            companion_process_uavdata = []
+            for i, name in enumerate(uav_names):
+                uavdir = os.path.join(tmpdir, name)
+                uav_info = info_dict['uav_info'][name]
+                cmdline_params = '{}:{}:{}'.format(name, uav_info['sysid'], MAVLINK_BASE_PORT + 10*i)
+                if info_dict['uav_info'][name]['has_gimbal']:
+                    cmdline_params += ':{}:{}'.format(server_ip, info_dict['uav_info'][name]['cambuffer_port'])
+                companion_process_uavdata.append(cmdline_params)
+
+            if companion_process_foreachuav:
+                for uavdata in companion_process_uavdata: # one process per UAV
+                    # launch companion_process_cmd simsync_port uav_name:sysid:mavlink_port
+                    acprocs.enter_context(subprocess.Popen(
+                        companion_process_cmd + [ str(SYMSYNC_PORT), uavdata ], cwd=uavdir))
+            else: # only one process for all UAVs
+                # launch companion_process_cmd simsync_port \
+                #        uav_name1:sysid1:mavlink_port1 ... \
+                #        uav_nameN:sysidN:mavlink_portN
+                acprocs.enter_context(subprocess.Popen(
+                    companion_process_cmd + [ str(SYMSYNC_PORT) ] + companion_process_uavdata, cwd=uavdir))
+
+        if chproc.stdout.readline().strip() != 'GZUAVCHANNEL:GO':
+            raise Exception('gzuavchannel initialization failed')
+
+        # We're done!
+        while True:
+            time.sleep(10)

@@ -1,0 +1,27 @@
+FROM gazebo:libgazebo8
+
+RUN apt-get update && apt-get install -y \
+    cmake curl git mercurial python-future python-pip python-opencv
+
+WORKDIR /gzuav
+COPY tmp/gzuav-src.tar ./gzuav-src.tar
+
+RUN tar xvf gzuav-src.tar
+
+# Prepare ArduPilot, Gazebo plugin and gzuav glue programs
+RUN mkdir gzuav-build && cd gzuav-build && \
+    cmake ../gzuav-src -DCMAKE_INSTALL_PREFIX=/gzuav/gzuav-install
+
+# Prepare ns-3
+RUN cd gzuav-src/ns-3 && ./setup-environment.sh
+
+# Build them
+RUN cd gzuav-build && make install
+RUN cd gzuav-src/ns-3/ns-3-allinone && ./build.py --enable-examples -- --build-profile=release
+
+# Setup environment for examples/tutorial
+RUN pip install dronekit
+ENV PATH="/gzuav/gzuav-install/bin:/gzuav/gzuav-src/ns-3/ns-3-allinone/ns-3-dev/build/src/external-sync/examples:${PATH}"
+ENV LD_LIBRARY_PATH=/gzuav/gzuav-src/ns-3/ns-3-allinone/ns-3-dev/build/lib
+
+CMD cd gzuav-src/tutorial && bash -i

@@ -1,0 +1,5 @@
+{
+	"ardupilot_program": "arducopter",
+	"ardupilot_params": [ "copter.parm", "gazebo-iris.parm" ],
+	"has_gimbal": false
+}

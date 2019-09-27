@@ -1,0 +1,22 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: gzuav
+Source: http://gzuav.dmi.unict.it/
+
+Files: *
+Copyright: Fabio D'Urso <durso@dmi.unict.it>
+License: GPL-3+
+
+Files: src/ardupilot/*
+Copyright: Fabio D'Urso <durso@dmi.unict.it>
+           ArduPilot Project
+License: GPL-3
+
+Files: src/gazebo/*
+Copyright: Fabio D'Urso <durso@dmi.unict.it>
+           Gazebo Project
+License: Apache-2.0
+
+Files: ns-3/external-sync/*
+Copyright: Federico Fausto Santoro <federico.santoro@unict.it>
+           Fabio D'Urso <durso@dmi.unict.it>
+License: GPL-3+

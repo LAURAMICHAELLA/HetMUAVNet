@@ -1,0 +1,22 @@
+Source: gzuav
+Section: misc
+Priority: optional
+Maintainer: Fabio D'Urso <durso@dmi.unict.it>
+Build-Depends: debhelper (>= 9), cmake, git, python-future, libgazebo9-dev, libns3-dev, libgsl-dev
+Standards-Version: 3.9.8
+Homepage: https://gzuav.dmi.unict.it
+
+Package: gzuav
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, gazebo9, ns3
+Description: A Gazebo-based framework for ArduCopter multi-UAV simulation
+ GzUav (from "Gazebo" and "UAV") is a framework to run multiple-UAV simulations in Gazebo.
+ .
+ It consists in a set of custom programs/scripts and plug-ins for other projects. In particular, it offers:
+ .
+ - Patches for ArduCopter 3.6.0 (which, among other things, make simulated UAVs be ready to fly much faster - 10 seconds instead of 1 minute).
+ - A tool, called GzUavChannel, that helps keeping the simulation clock stricly sychronised in all programs that are part of the simulation.
+ - A Gazebo plugin that works as a GzUavChannel-aware interface for ArduCopter.
+ - An optional module for the Ns-3 network simulator, to synchronise its clock too. This enables integration of realistic wireless networking in the simulation.
+ .
+ Example programs, written in DroneKit-python, for autonomous UAV operations are also provided.

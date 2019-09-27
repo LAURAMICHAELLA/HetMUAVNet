@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+import configparser
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '../share/gzuav'))
+from gzuavlib.GazeboPaths import generate_model_path, generate_plugin_path
+from gzuavlib.GzUavPaths import LIBEXECDIR, SHAREDIR
+import gzuavlib.StatusServer as StatusServer
+from gzuavlib.WorldTemplateFiller import WorldTemplateFiller
+
+config_path = sys.argv[1]
+
+GZUAVCHANNEL = os.path.join(LIBEXECDIR, 'gzuav/gzuavchannel')
+MAVMIX = os.path.join(LIBEXECDIR, 'gzuav/mavmix')
+
+# read configuration file
+config = configparser.ConfigParser()
+if len(config.read(config_path)) != 1:
+    raise Exception('filed to read configuration file')
+
+# retrieve uav names (i.e. sections whose name starts with "uav:")
+uav_names = [ s[4:] for s in config.sections() if s[0:4] == 'uav:' ]
+
+# parse world reference frame
+geo_origin_lat = config.getfloat('world', 'geo_origin_lat')
+geo_origin_lon = config.getfloat('world', 'geo_origin_lon')
+geo_origin_hgt = config.getfloat('world', 'geo_origin_hgt')
+geo_origin_hdg = config.getfloat('world', 'geo_origin_hdg')
+
+# load world template (assume path is relative to configuration file)
+world_template = config.get('world', 'template')
+world = WorldTemplateFiller(os.path.join(os.path.dirname(config_path), world_template))
+world.set_geo_ref(geo_origin_lat, geo_origin_lon, geo_origin_hgt, geo_origin_hdg)
+
+# load UAV info
+uav_info = dict()
+for uav_name in uav_names:
+    section_name = 'uav:' + uav_name
+    init_x = config.getfloat(section_name, 'init_x')
+    init_y = config.getfloat(section_name, 'init_y')
+    init_z = config.getfloat(section_name, 'init_z')
+    init_hdg = config.getfloat(section_name, 'init_hdg')
+    uav_type = config.get(section_name, 'uav_type')
+    world.add_uav(uav_type, uav_name, init_x, init_y, init_z, init_hdg)
+    uav_info[uav_name] = \
+    {
+        'home': '{},{},{},{}'.format(
+            geo_origin_lat, geo_origin_lon,
+            geo_origin_hgt, geo_origin_hdg - init_hdg),
+        'type': uav_type,
+        'sysid': config.getint(section_name, 'mavlink_sysid')
+    }
+
+# parse network parameters
+network_info = \
+{
+    'host_address': config.get('network', 'host_address'),
+    'status_port': config.getint('network', 'status_port'),
+    'gzuavchannel_port': config.getint('network', 'gzuavchannel_port'),
+    'extsync_port': config.getint('network', 'extsync_port'),
+    'gazebo_port': config.getint('network', 'gazebo_port'),
+    'mavmix_uav_port': config.getint('network', 'mavmix_uav_port'),
+    'mavmix_gcs_port': config.getint('network', 'mavmix_gcs_port')
+}
+
+with tempfile.TemporaryDirectory(prefix='gzuav-') as tmpdir:
+    # prepare gazebo world according to the user-provided template
+    world_path = os.path.join(tmpdir, 'gen.world')
+    with open(world_path, 'wt') as fp:
+        world.write_to(fp)
+
+    gzenv = dict(os.environ)
+    gzenv['GAZEBO_MASTER_URI'] = 'http://localhost:{}'.format(network_info['gazebo_port'])
+    gzenv['GAZEBO_MODEL_PATH'] = generate_model_path(os.path.join(SHAREDIR, 'gzuav/gazebo/models'))
+    gzenv['GAZEBO_PLUGIN_PATH'] = generate_plugin_path(os.path.join(LIBEXECDIR, 'gzuav/gazebo/plugins'))
+    gzenv['GZUAV_UDS'] = os.path.join(tmpdir, 'gzuavchannel')
+
+    for i, uav_name in enumerate(uav_names):
+        # Read vehicle type information
+        gzuav_info = os.path.join(SHAREDIR, 'gzuav/gazebo/models', uav_info[uav_name]['type'], 'model.gzuav')
+        with open(gzuav_info, 'rt') as fp:
+            uav_info[uav_name].update(json.load(fp))
+
+        # Does the Vehicle have a gimbal?
+        if uav_info[uav_name]['has_gimbal']:
+            cambuffer_port = config.getint('network', 'cambuffer_base') + i
+            gzenv['GZUAV_CAMBUFFER_PORT-' + uav_name] = str(cambuffer_port)
+            uav_info[uav_name]['cambuffer_port'] = cambuffer_port
+
+    gzcmd = \
+    [
+        'gzserver',
+        '--verbose',
+        world_path
+    ]
+
+    gzuavchannelcmd = \
+    [
+        GZUAVCHANNEL,
+        '--upstream', 'uds:' + gzenv['GZUAV_UDS'],
+        '--downstream', 'tcpl:' + str(network_info['gzuavchannel_port']),
+        '--external-sync-server', str(network_info['extsync_port'])
+    ] + uav_names
+
+    mavmixcmd = \
+    [
+        MAVMIX,
+        str(network_info['mavmix_gcs_port']),
+        str(network_info['mavmix_uav_port'])
+    ]
+
+    with subprocess.Popen(gzuavchannelcmd, stdout=subprocess.PIPE, universal_newlines=True) as chproc, subprocess.Popen(mavmixcmd):
+        if chproc.stdout.readline().strip() != 'GZUAVCHANNEL:STARTING':
+            raise Exception('Failed to launch gzuavchannel')
+        else:
+            print('Waiting for Gazebo to connect...', file=sys.stderr)
+
+        with subprocess.Popen(gzcmd, env=gzenv):
+            if chproc.stdout.readline().strip() != 'GZUAVCHANNEL:HALF':
+                raise Exception('gzuavchannel failed to receive connections from Gazebo')
+
+            if chproc.stdout.readline().strip() != 'GZUAVCHANNEL:TCP-LISTENING':
+                raise Exception('gzuavchannel failed to start server')
+
+            # Start status server
+            StatusServer.start(network_info['status_port'], uav_info, network_info)
+
+            print('Waiting for clusters to connect...', file=sys.stderr)
+
+            if chproc.stdout.readline().strip() != 'GZUAVCHANNEL:GO':
+                raise Exception('gzuavchannel initialization failed')
+
+            # We're done!
+            StatusServer.set_status_running()
+
+            while True:
+                time.sleep(10)

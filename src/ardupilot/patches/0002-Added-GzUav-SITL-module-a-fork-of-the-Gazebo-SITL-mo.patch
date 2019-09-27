@@ -1,0 +1,291 @@
+From 4fd4fa5800965a8539bb868bd158f1fb7690374b Mon Sep 17 00:00:00 2001
+From: Fabio D'Urso <durso@dmi.unict.it>
+Date: Sun, 22 Jul 2018 17:32:21 +0200
+Subject: [PATCH 2/3] Added "GzUav" SITL module (a fork of the Gazebo SITL
+ module)
+
+---
+ libraries/AP_HAL_SITL/SITL_cmdline.cpp           |  2 +
+ libraries/SITL/{SIM_Gazebo.cpp => SIM_GzUav.cpp} | 98 +++++++++---------------
+ libraries/SITL/{SIM_Gazebo.h => SIM_GzUav.h}     | 24 +++---
+ 3 files changed, 49 insertions(+), 75 deletions(-)
+ copy libraries/SITL/{SIM_Gazebo.cpp => SIM_GzUav.cpp} (56%)
+ copy libraries/SITL/{SIM_Gazebo.h => SIM_GzUav.h} (75%)
+
+diff --git a/libraries/AP_HAL_SITL/SITL_cmdline.cpp b/libraries/AP_HAL_SITL/SITL_cmdline.cpp
+index a6ae629d2..31da5c88b 100644
+--- a/libraries/AP_HAL_SITL/SITL_cmdline.cpp
++++ b/libraries/AP_HAL_SITL/SITL_cmdline.cpp
+@@ -20,6 +20,7 @@
+ #include <SITL/SIM_BalanceBot.h>
+ #include <SITL/SIM_CRRCSim.h>
+ #include <SITL/SIM_Gazebo.h>
++#include <SITL/SIM_GzUav.h>
+ #include <SITL/SIM_last_letter.h>
+ #include <SITL/SIM_JSBSim.h>
+ #include <SITL/SIM_Tracker.h>
+@@ -104,6 +105,7 @@ static const struct {
+     { "jsbsim",             JSBSim::create },
+     { "flightaxis",         FlightAxis::create },
+     { "gazebo",             Gazebo::create },
++    { "gzuav",              GzUav::create },
+     { "last_letter",        last_letter::create },
+     { "tracker",            Tracker::create },
+     { "balloon",            Balloon::create },
+diff --git a/libraries/SITL/SIM_Gazebo.cpp b/libraries/SITL/SIM_GzUav.cpp
+similarity index 56%
+copy from libraries/SITL/SIM_Gazebo.cpp
+copy to libraries/SITL/SIM_GzUav.cpp
+index 0093ee108..9f4139b5a 100644
+--- a/libraries/SITL/SIM_Gazebo.cpp
++++ b/libraries/SITL/SIM_GzUav.cpp
+@@ -13,54 +13,60 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ /*
+-  simulator connector for ardupilot version of Gazebo
++  simulator connection for GzUav (a gazebo-based simulation environment)
+ */
+ 
+-#include "SIM_Gazebo.h"
++#include "SIM_GzUav.h"
+ 
+ #include <stdio.h>
++#include <stdlib.h>
++#include <err.h>
+ #include <errno.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ 
+ #include <AP_HAL/AP_HAL.h>
+ 
+ extern const AP_HAL::HAL& hal;
+ 
++static int connectToUnixDomainSocket(const char *path)
++{
++    int fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
++
++    struct sockaddr_un addr;
++    memset(&addr, 0, sizeof(addr));
++    addr.sun_family = AF_UNIX;
++    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
++
++    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) == -1)
++        err(EXIT_FAILURE, "connect failed");
++
++    return fd;
++}
++
+ namespace SITL {
+ 
+-Gazebo::Gazebo(const char *home_str, const char *frame_str) :
++GzUav::GzUav(const char *home_str, const char *frame_str) :
+     Aircraft(home_str, frame_str),
+     last_timestamp(0),
+-    socket_sitl{true}
++    socket_sitl(-1)
+ {
+-    // try to bind to a specific port so that if we restart ArduPilot
+-    // Gazebo keeps sending us packets. Not strictly necessary but
+-    // useful for debugging
+-    fprintf(stdout, "Starting SITL Gazebo\n");
++    fprintf(stdout, "Starting SITL GzUav\n");
+ }
+ 
+ /*
+   Create and set in/out socket
+ */
+-void Gazebo::set_interface_ports(const char* address, const int port_in, const int port_out)
++void GzUav::set_interface_ports(const char* address, const int port_in, const int port_out)
+ {
+-    if (!socket_sitl.bind("0.0.0.0", port_in)) {
+-        fprintf(stderr, "SITL: socket in bind failed on sim in : %d  - %s\n", port_in, strerror(errno));
+-        fprintf(stderr, "Abording launch...\n");
+-        exit(1);
+-    }
+-    printf("Bind %s:%d for SITL in\n", "127.0.0.1", port_in);
+-    socket_sitl.reuseaddress();
+-    socket_sitl.set_blocking(false);
+-
+-    _gazebo_address = address;
+-    _gazebo_port = port_out;
+-    printf("Setting Gazebo interface to %s:%d \n", _gazebo_address, _gazebo_port);
++    socket_sitl = connectToUnixDomainSocket(address);
++    dprintf(socket_sitl, "%d", port_out);
+ }
+ 
+ /*
+   decode and send servos
+ */
+-void Gazebo::send_servos(const struct sitl_input &input)
++void GzUav::send_servos(const struct sitl_input &input)
+ {
+     servo_packet pkt;
+     // should rename servo_command
+@@ -69,34 +75,27 @@ void Gazebo::send_servos(const struct sitl_input &input)
+     {
+       pkt.motor_speed[i] = (input.servos[i]-1000) / 1000.0f;
+     }
+-    socket_sitl.sendto(&pkt, sizeof(pkt), _gazebo_address, _gazebo_port);
++
++    send(socket_sitl, &pkt, sizeof(pkt), 0);
+ }
+ 
+ /*
+-  receive an update from the FDM
++  receive an update from gzuavchannel
+   This is a blocking function
+  */
+-void Gazebo::recv_fdm(const struct sitl_input &input)
++void GzUav::recv_fdm(const struct sitl_input &input)
+ {
+     fdm_packet pkt;
+ 
+-    /*
+-      we re-send the servo packet every 0.1 seconds until we get a
+-      reply. This allows us to cope with some packet loss to the FDM
+-     */
+-    while (socket_sitl.recv(&pkt, sizeof(pkt), 100) != sizeof(pkt)) {
+-        send_servos(input);
+-        // Reset the timestamp after a long disconnection, also catch gazebo reset
+-        if (get_wall_time_us() > last_wall_time_us + GAZEBO_TIMEOUT_US) {
+-            last_timestamp = 0;
+-        }
+-    }
++    if (recv(socket_sitl, &pkt, sizeof(pkt), 0) != sizeof(pkt))
++        err(EXIT_FAILURE, "recv failed");
+ 
+     const double deltat = pkt.timestamp - last_timestamp;  // in seconds
+     if (deltat < 0) {  // don't use old paquet
+         time_now_us += 1;
+         return;
+     }
++
+     // get imu stuff
+     accel_body = Vector3f(static_cast<float>(pkt.imu_linear_acceleration_xyz[0]),
+                           static_cast<float>(pkt.imu_linear_acceleration_xyz[1]),
+@@ -133,41 +132,16 @@ void Gazebo::recv_fdm(const struct sitl_input &input)
+ }
+ 
+ /*
+-  Drain remaining data on the socket to prevent phase lag.
+- */
+-void Gazebo::drain_sockets()
+-{
+-    const uint16_t buflen = 1024;
+-    char buf[buflen];
+-    ssize_t received;
+-    errno = 0;
+-    do {
+-        received = socket_sitl.recv(buf, buflen, 0);
+-        if (received < 0) {
+-            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != 0) {
+-                fprintf(stderr, "error recv on socket in: %s \n",
+-                        strerror(errno));
+-            }
+-        } else {
+-            // fprintf(stderr, "received from control socket: %s\n", buf);
+-        }
+-    } while (received > 0);
+-
+-}
+-
+-/*
+   update the Gazebo simulation by one time step
+  */
+-void Gazebo::update(const struct sitl_input &input)
++void GzUav::update(const struct sitl_input &input)
+ {
+     send_servos(input);
+     recv_fdm(input);
+     update_position();
+ 
+-    time_advance();
+     // update magnetic field
+     update_mag_field_bf();
+-    drain_sockets();
+ }
+ 
+ }  // namespace SITL
+diff --git a/libraries/SITL/SIM_Gazebo.h b/libraries/SITL/SIM_GzUav.h
+similarity index 75%
+copy from libraries/SITL/SIM_Gazebo.h
+copy to libraries/SITL/SIM_GzUav.h
+index 72b29988c..91af4b01c 100644
+--- a/libraries/SITL/SIM_Gazebo.h
++++ b/libraries/SITL/SIM_GzUav.h
+@@ -13,7 +13,7 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ /*
+-  simulator connection for ardupilot version of Gazebo
++  simulator connection for GzUav (a gazebo-based simulation environment)
+ */
+ 
+ #pragma once
+@@ -24,26 +24,26 @@
+ namespace SITL {
+ 
+ /*
+-  Gazebo simulator
++  GzUav simulator (based on SIM_Gazebo)
+  */
+-class Gazebo : public Aircraft {
++class GzUav : public Aircraft {
+ public:
+-    Gazebo(const char *home_str, const char *frame_str);
++    GzUav(const char *home_str, const char *frame_str);
+ 
+     /* update model by one time step */
+     void update(const struct sitl_input &input);
+ 
+     /* static object creator */
+     static Aircraft *create(const char *home_str, const char *frame_str) {
+-        return new Gazebo(home_str, frame_str);
++        return new GzUav(home_str, frame_str);
+     }
+ 
+-    /*  Create and set in/out socket for Gazebo simulator */
++    /*  Create and set in/out socket for GzUav simulator */
+     void set_interface_ports(const char* address, const int port_in, const int port_out);
+ 
+ private:
+     /*
+-      packet sent to Gazebo
++      packet sent to GzUav
+      */
+     struct servo_packet {
+       // size matches sitl_input upstream
+@@ -51,10 +51,11 @@ private:
+     };
+ 
+     /*
+-      reply packet sent from Gazebo to ArduPilot
++      reply packet sent from GzUav to ArduPilot
+      */
+     struct fdm_packet {
+       double timestamp;  // in seconds
++      double position_xyz_world[3]; // ignored by ArduPilot
+       double imu_angular_velocity_rpy[3];
+       double imu_linear_acceleration_xyz[3];
+       double imu_orientation_quat[4];
+@@ -64,14 +65,11 @@ private:
+ 
+     void recv_fdm(const struct sitl_input &input);
+     void send_servos(const struct sitl_input &input);
+-    void drain_sockets();
+ 
+     double last_timestamp;
+ 
+-    SocketAPM socket_sitl;
+-    const char *_gazebo_address = "127.0.0.1";
+-    int _gazebo_port = 9002;
+-    static const uint64_t GAZEBO_TIMEOUT_US = 5000000;
++    // Unix-domain socket connected to gzuavchannel
++    int socket_sitl;
+ };
+ 
+ }  // namespace SITL
+-- 
+2.13.6
+
