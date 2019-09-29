@@ -1,0 +1,10 @@
+# Hashes of file build rules.
+5a43e576fb7e424be820172dc6cf4971 src/ardupilot/CMakeFiles/ardupilot
+da84386461233b3e4e24f5ae6e07bb2d src/ardupilot/CMakeFiles/ardupilot-complete
+e8f432b7b417f0a0bf5f1b640b39e565 src/ardupilot/ardupilot-prefix/src/ardupilot-stamp/ardupilot-build
+9df0a68f5c1a35d6e9684c8ebafc8f79 src/ardupilot/ardupilot-prefix/src/ardupilot-stamp/ardupilot-configure
+e2c9a4beb062ce186686b153aef4c627 src/ardupilot/ardupilot-prefix/src/ardupilot-stamp/ardupilot-download
+1f10796e3eb0f7512cb1c1ee9dacc4be src/ardupilot/ardupilot-prefix/src/ardupilot-stamp/ardupilot-install
+937b94184a1a13ec257b9ffc7ba288f0 src/ardupilot/ardupilot-prefix/src/ardupilot-stamp/ardupilot-mkdir
+7bc6d44526566d42565bb3e61b345485 src/ardupilot/ardupilot-prefix/src/ardupilot-stamp/ardupilot-patch
+d5ebee1a7728483203d0e67c43463ec6 src/ardupilot/ardupilot-prefix/src/ardupilot-stamp/ardupilot-update

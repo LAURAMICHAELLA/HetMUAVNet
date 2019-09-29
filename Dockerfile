@@ -33,6 +33,7 @@ RUN \
   	libxml2-dev \
   	vtun \
   	lxc \
+	curl \
 	&& rm -rf /var/lib/apt/lists/
 
 RUN \
@@ -59,7 +60,7 @@ RUN apt-get install -y \
   cmake \
   libc6-dev \
   libc6-dev-i386 \
-  g++-multilib
+  g++-multilib 
 
 
 # Cloning & installing NS3-all-in-one
