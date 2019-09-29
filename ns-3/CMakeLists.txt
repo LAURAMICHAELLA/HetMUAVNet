@@ -1,6 +1,6 @@
 # Ns-3 version we reuired to be compiled against. It must correspond to the one
 # that is packaged in Ubuntu.
-set(NS3VER 3.27)
+set(NS3VER 3.29)
 
 # Locate ns-3's libraries
 find_package(PkgConfig REQUIRED)
