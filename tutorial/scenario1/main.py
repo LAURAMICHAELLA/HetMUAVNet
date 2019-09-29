@@ -1,4 +1,4 @@
-# DroneKit-Python program based on the "Simple Go To (Copter)" example.
+    # DroneKit-Python program based on the "Simple Go To (Copter)" example.
 # Time is synchronized to simulation clock through the "simtime" library.
 
 import helper
