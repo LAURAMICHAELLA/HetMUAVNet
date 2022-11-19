@@ -33,7 +33,6 @@ RUN \
   	libxml2-dev \
   	vtun \
   	lxc \
-	curl \
 	&& rm -rf /var/lib/apt/lists/
 
 RUN \
@@ -46,7 +45,7 @@ RUN \
 
 RUN \
     apt update && \
-    apt install -y debhelper cmake git python-future libgazebo9-dev libns3-dev libgsl-dev
+    apt install -y debhelper cmake git python-pip libgazebo9-dev libns3-dev libgsl-dev curl libgl
 
 # QT4 components
 RUN apt-get install -y \
@@ -60,8 +59,11 @@ RUN apt-get install -y \
   cmake \
   libc6-dev \
   libc6-dev-i386 \
-  g++-multilib 
+  g++-multilib \
+  pip 
 
+RUN apt update && \
+    pip install dronekit
 
 # Cloning & installing NS3-all-in-one
 RUN hg clone http://code.nsnam.org/ns-3-allinone
